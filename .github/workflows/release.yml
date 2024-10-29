@@ -1,0 +1,176 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} for ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: shorm
+            asset_name: shorm-linux-x86_64
+            arch: x86_64
+          - os: macos-latest
+            artifact_name: shorm
+            asset_name: shorm-macos-x86_64
+            arch: x86_64
+          - os: macos-latest
+            artifact_name: shorm
+            asset_name: shorm-macos-arm64
+            arch: aarch64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Cache
+        uses: actions/cache@v4
+        env:
+          cache-name: cache-runner-ghcup
+        if: runner.os == 'macOS'
+        with:
+          path: ~/.ghcup
+          key: ${{ runner.os }}-${{ matrix.arch }}-${{ env.cache-name }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-${{ env.cache-name }}
+
+      - name: Cache
+        uses: actions/cache@v4
+        env:
+          cache-name: cache-local-ghcup
+        if: runner.os == 'Linux'
+        with:
+          path: /usr/local/.ghcup
+          key: ${{ runner.os }}-${{ matrix.arch }}-${{ env.cache-name }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-${{ env.cache-name }}
+
+      - name: Cache
+        uses: actions/cache@v4
+        env:
+          cache-name: cache-stack
+        with:
+          path: ~/.stack
+          key: ${{ runner.os }}-${{ matrix.arch }}-${{ env.cache-name }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-${{ env.cache-name }}
+
+      - name: Cache
+        uses: actions/cache@v4
+        env:
+          cache-name: cache-stack-work
+        with:
+          path: ./.stack-work
+          key: ${{ runner.os }}-${{ matrix.arch }}-${{ env.cache-name }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-${{ env.cache-name }}
+
+      - name: Setup Haskell
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.6"
+          cabal-version: "3.12"
+          enable-stack: true
+          stack-version: "3.1"
+
+      - name: Install dependencies
+        run: |
+          stack setup
+          stack build --only-dependencies --test --bench --no-run-tests --no-run-benchmarks
+
+      - name: Build
+        run: |
+          # Initialize the binary installation path and architecture variables
+          export arch="${{ matrix.arch }}"
+          export ghc_variant=""
+
+          # Check for Ubuntu OS and arm64/aarch64 architecture
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            if [[ ( "$arch" == "arm64" || $arch == "aarch64" ) ]]; then
+              # Install necessary tools for cross-compilation
+              sudo apt update -y
+              sudo apt install -y gcc-aarch64-linux-gnu libtinfo-dev
+              sudo apt install -y build-essential libnuma1 libnuma-dev libtinfo-dev
+              sudo apt install -y libtinfo5 libtinfo6 libc6-dev llvm*
+              sudo apt install -y clang ninja-build zlib1g-dev libgmp-dev
+
+              # Set up environment for cross-compilation
+              export PATH="/usr/aarch64-linux-gnu/bin:$PATH"
+
+              # Set the architecture and GHC variant for ARM64
+              export arch="aarch64"
+              export ghc_variant="--ghc-variant=aarch64-unknown-linux-gnu"
+            fi
+          fi
+
+          # Install the stack with the defined parameters
+          stack install --local-bin-path=. --arch=$arch $ghc_variant
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          name: Release ${{ steps.get_version.outputs.VERSION }}
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Display structure of downloaded files
+        run: ls -R
+
+      - name: Rename files
+        run: |
+          mkdir to_upload
+          mv shorm-linux-x86_64/shorm to_upload/shorm-linux-x86_64
+          mv shorm-macos-x86_64/shorm to_upload/shorm-macos-x86_64
+          mv shorm-macos-arm64/shorm to_upload/shorm-macos-arm64
+
+      - name: Upload Release Asset Linux
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          files: to_upload/shorm-linux-x86_64
+
+      - name: Upload Release Asset macOS
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          files: to_upload/shorm-macos-x86_64
+
+      - name: Upload Release Asset macOS ARM64
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+          files: to_upload/shorm-macos-arm64
