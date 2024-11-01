@@ -7,10 +7,10 @@ import qualified Shorm.Commands                as Commands
 import           Options.Applicative
 
 data Command
-  = Add String String (Maybe String)  -- name user@host[:port] id_file
+  = Add String String (Maybe String)  -- name user@host[:port] id-file
   | List
   | Delete String
-  | Edit String String (Maybe String)  -- name userHost id_file
+  | Edit String String (Maybe String)  -- name userHost id-file
   | Search String
   | Version
   | BackupClean

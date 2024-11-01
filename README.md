@@ -110,4 +110,4 @@ Notes:
 - If the port is not specified, it defaults to 22.
 - If the user is not specified, the system will use the default SSH behavior (usually your current username).
 - When editing, you can change any combination of user, host, port, and identity file. Omitted parts will remain unchanged.
-- The `--id_file` option allows you to specify a custom identity file (private key) for the connection.
+- The `--id-file` option allows you to specify a custom identity file (private key) for the connection.

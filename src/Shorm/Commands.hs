@@ -36,8 +36,10 @@ import           Control.Exception              ( try
                                                 , IOException
                                                 , SomeException
                                                 , fromException
+                                                , throwIO
                                                 )
 import           System.Timeout                 ( timeout )
+import           System.IO.Error                ( ioeGetErrorString )
 import           Text.Read                      ( readMaybe )
 import           Data.Maybe                     ( fromMaybe, isJust )
 import           Data.Time.Clock.POSIX          ( POSIXTime
@@ -70,20 +72,20 @@ add connName userHostPort maybeIdFile = do
         , Config.idFile          = maybeIdFile
         , Config.identitiesOnly  = isJust maybeIdFile
         }
-  exists <- connectionExists configPath connName
-  if exists
-    then handleAddResult (Just (Right (Left "Connection already exists")))
-                         newConnection
+  connections <- Config.readConfig configPath
+  let existingConnections = filter (\conn -> Config.name conn == connName) connections
+  if not (null existingConnections)
+    then do
+      putStrLn $ "Error: A connection with the name '" ++ connName ++ "' already exists."
+      putStrLn "Please choose a different name or use the 'edit' command to modify the existing connection."
     else do
-      result <- withTimeout 30000000 $ try $ Config.appendConnection
-        configPath
-        newConnection
+      result <- withTimeout 30000000 $ try $ Config.appendConnection configPath newConnection
       handleAddResult result newConnection
 
-connectionExists :: FilePath -> String -> IO Bool
-connectionExists configPath connName = do
+findExistingConnections :: FilePath -> String -> IO [Config.SSHConnection]
+findExistingConnections configPath connName = do
   connections <- Config.readConfig configPath
-  return $ any (\conn -> Config.name conn == connName) connections
+  return $ filter (\conn -> Config.name conn == connName) connections
 
 handleAddResult
   :: Maybe (Either SomeException (Either String ()))
@@ -161,30 +163,56 @@ printConnection conn =
 delete :: String -> IO ()
 delete connName = do
   configPath <- getSSHConfigPath
-  -- Create a backup before deleting a connection
-  backupCreate configPath
-  Config.removeConnection configPath connName
-  putStrLn $ "Deleted connection: " ++ connName
+  
+  result <- try $ do
+    connections <- Config.readConfig configPath
+    case find (\conn -> Config.name conn == connName) connections of
+      Nothing -> throwIO $ userError $ "Connection not found: " ++ connName
+      Just _ -> do
+        let updatedConnections = filter (\conn -> Config.name conn /= connName) connections
+        Config.writeConfig configPath updatedConnections
+
+  case result of
+    Left e -> case fromException e of
+      Just (err :: IOError) -> putStrLn $ "Error: " ++ ioeGetErrorString err
+      _ -> putStrLn $ "Error deleting connection: " ++ show e
+    Right _ -> putStrLn $ "Successfully deleted connection: " ++ connName
 
 edit :: String -> String -> Maybe String -> IO ()
 edit connName userHostPort maybeIdFile = do
-  configPath  <- getSSHConfigPath
+  configPath <- getSSHConfigPath
   -- Create a backup before editing a connection
   backupCreate configPath
-  connections <- Config.readConfig configPath
-  case find (\conn -> Config.name conn == connName) connections of
-    Nothing   -> putStrLn $ "Connection not found: " ++ connName
-    Just conn -> do
-      let (editUser, editHost, editPort) = parseUserHostPort userHostPort
-      let editIdFile = if isJust maybeIdFile then maybeIdFile else Config.idFile conn
-      let editedConn = conn { Config.host   = editHost
-                            , Config.user   = editUser
-                            , Config.port   = editPort
-                            , Config.idFile = editIdFile
-                            , Config.identitiesOnly = isJust editIdFile
-                            }
-      Config.updateConnection configPath editedConn
+  result <- try $ do
+    connections <- Config.readConfig configPath
+    case find (\conn -> Config.name conn == connName) connections of
+      Nothing -> throwIO $ userError $ "Connection not found: " ++ connName
+      Just oldConn -> do
+        let (editUser, editHost, editPort) = parseUserHostPort userHostPort
+        let editIdFile = maybeIdFile `orElse` Config.idFile oldConn
+        let editedConn = oldConn { Config.host = editHost
+                                 , Config.user = editUser
+                                 , Config.port = editPort
+                                 , Config.idFile = editIdFile
+                                 , Config.identitiesOnly = isJust editIdFile
+                                 }
+        let updatedConnections = map (\conn -> if Config.name conn == connName then editedConn else conn) connections
+        Config.writeConfig configPath updatedConnections
+        return editedConn
+  case result of
+    Left e -> case fromException e of
+      Just (err :: IOError) -> putStrLn $ "Error: " ++ ioeGetErrorString err
+      _ -> do
+        putStrLn $ "Error editing connection: " ++ show e
+        putStrLn "There might be a problem with the config file or permissions."
+    Right editedConn -> do
+      putStrLn $ "Successfully edited connection: " ++ connName
       printConnection editedConn
+
+-- Helper function to use the first Just value
+orElse :: Maybe a -> Maybe a -> Maybe a
+orElse (Just x) _ = Just x
+orElse Nothing y = y
 
 parseUserHostPort :: String -> (Maybe String, String, Maybe Int)
 parseUserHostPort input = case break (== '@') input of

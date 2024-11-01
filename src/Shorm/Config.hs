@@ -22,7 +22,10 @@ import           Control.Exception              ( try
                                                 , bracket
                                                 , catch
                                                 , throwIO
+                                                , handle
                                                 )
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import           System.IO.Error                ( isDoesNotExistError )
 import           System.FilePath                ( takeDirectory, takeFileName, (</>), takeExtension )
 import           Data.Time.Clock                ( getCurrentTime )
@@ -31,6 +34,8 @@ import           System.IO                      ( hPutStr
                                                 , hClose
                                                 , openTempFile
                                                 , Handle
+                                                , withFile
+                                                , IOMode(WriteMode)
                                                 )
 import           Data.Char                      ( toLower
                                                 , isSpace
@@ -79,6 +84,9 @@ normalizeConnection conn = conn { host = map toLower (host conn)
 strip :: String -> String
 strip = dropWhile isSpace . reverse . dropWhile isSpace . reverse
 
+splitOnHost :: [String] -> [[String]]
+splitOnHost = filter (not . null) . groupBy (\_ y -> not (isHostLine y)) . filter (not . null . strip)
+
 readConfig :: FilePath -> IO [SSHConnection]
 readConfig path = do
   exists <- doesFileExist path
@@ -91,10 +99,6 @@ readConfig path = do
       return uniqueConnections
     else return []
  where
-  splitOnHost =
-    filter (not . null) . groupBy (\_ y -> not (isHostLine y)) . filter
-      (not . null . strip)
-
   isSameConnection conn1 conn2 =
     map toLower (host conn1) == map toLower (host conn2)
       && (fmap (map toLower) (user conn1) == fmap (map toLower) (user conn2))
@@ -118,7 +122,7 @@ parseConnection configLines = do
         , (_ : match : _) <- matches
         ]
 
-      idFilePath = getField "^[[:space:]]*[Ii]dentity[Ff]ile[[:space:]]+(.+)"
+      idFilePath = getField "^[[:space:]]*[Ii]dentity[Ff]ile[[:space:]]+(.+)"  -- Note: This regex matches both "IdentityFile" and "identity file"
       identitiesOnlyFlag = any (\line -> (line :: String) =~ ("^[[:space:]]*[Ii]dentities[Oo]nly[[:space:]]+[Yy]es" :: String) :: Bool) configLines
 
   if null name''
@@ -155,8 +159,20 @@ writeConfig path conns = do
   when exists $ do
     copyFile path backupPath
     putStrLn $ "Backup created: " ++ backupPath
-  withTempFile "." "shorm_temp_config" $ \tempPath tempHandle -> do
-    mapM_ (hPutStr tempHandle . formatConnection) conns
+  
+  content <- if exists 
+    then readFile path
+    else return ""
+    
+  let originalLines = lines content
+      hostBlocks = splitOnHost originalLines
+      -- Keep blocks that aren't SSH host configurations
+      nonHostBlocks = filter (not . any isHostLine) hostBlocks
+      -- Format the new connections
+      newContent = unlines $ concat nonHostBlocks ++ concatMap (lines . formatConnection) conns
+
+  withTempFile (takeDirectory path) "shorm_temp_config" $ \tempPath tempHandle -> do
+    hPutStr tempHandle newContent
     hClose tempHandle
     renameFile tempPath path
 
@@ -173,31 +189,56 @@ appendConnection path conn = do
       return $ Left $ "Failed to append connection: " ++ show e
     Right _ -> return $ Right ()
 
-removeConnection :: FilePath -> String -> IO ()
-removeConnection path name' = do
-  content <- readFile path
-  let lines' = lines content
-      (before, after) = break (isHostLineForName . strip) lines'
-      remaining = dropWhile (not . isHostLineForName . strip) after
-      newContent = unlines $ before ++ remaining
+removeConnection :: FilePath -> String -> IO (Either String Bool)
+removeConnection path name' = handle (\(e :: IOException) -> return $ Left $ "Error removing connection: " ++ show e) $ do
+  content <- TIO.readFile path
+  let lines' = T.lines content
+      blocks = splitOnHost (map T.unpack $ T.lines content)
+      -- Keep all blocks that don't match the host we're removing
+      remainingBlocks = filter (not . isTargetHostBlock) blocks
+      newContent = T.unlines $ map T.pack $ concat remainingBlocks
 
-  writeFile path newContent
+  if length blocks == length remainingBlocks
+    then do
+      putStrLn "Debug: No changes were made to the content"
+      return $ Right False
+    else do
+      TIO.writeFile path newContent
+      return $ Right True
   where
-    isHostLineForName :: String -> Bool
-    isHostLineForName line = (line =~ ("^[Hh]ost[[:space:]]+" ++ name' ++ "$" :: String) :: Bool)
+    isTargetHostBlock :: [String] -> Bool
+    isTargetHostBlock block = case block of
+      (firstLine:_) -> isHostLine firstLine && isHostLineForName (T.pack firstLine)
+      _ -> False
+
+    isHostLineForName :: T.Text -> Bool
+    isHostLineForName line = line =~ (T.pack ("^[Hh]ost[[:space:]]+" ++ escape name' ++ "$") :: T.Text)
+
+    escape :: String -> String
+    escape = concatMap (\c -> if c `elem` "[]{}()*+?.|^$\\" then ['\\', c] else [c])
 
 updateConnection :: FilePath -> SSHConnection -> IO ()
 updateConnection path newConn = do
-  content <- readFile path
-  let lines' = lines content
-      (before, connectionBlock) = break (isHostLineForConn . strip) lines'
-      after = dropWhile (not . isHostLineForConn . strip) $ dropWhile (isHostLineForConn . strip) connectionBlock
-      newContent = unlines $ before ++ lines (formatConnection newConn) ++ after
+  content <- TIO.readFile path
+  let blocks = splitOnHost (map T.unpack $ T.lines content)
+      -- Replace matching block with new connection
+      updatedBlocks = map updateBlock blocks
+      newContent = T.unlines $ map T.pack $ concat updatedBlocks
 
-  writeFile path newContent
+  withTempFile (takeDirectory path) "shorm_temp_config" $ \tempPath tempHandle -> do
+    TIO.hPutStr tempHandle newContent
+    hClose tempHandle
+    renameFile tempPath path
   where
-    isHostLineForConn :: String -> Bool
-    isHostLineForConn line = (line =~ ("^[Hh]ost[[:space:]]+" ++ name newConn ++ "$" :: String) :: Bool)
+    updateBlock block = case block of
+      (firstLine:_) | isHostLine firstLine && matchesConnection firstLine -> 
+        lines $ formatConnection newConn
+      _ -> block
+    
+    matchesConnection line = 
+      (T.unpack (T.strip (T.pack line)) :: String) =~ 
+        (T.unpack $ T.pack $ "^[Hh]ost[[:space:]]+" ++ name newConn ++ "$" :: String)
+
 generateBackupFilename :: FilePath -> IO FilePath
 generateBackupFilename path = do
     now <- getCurrentTime
