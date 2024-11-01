@@ -269,7 +269,7 @@ isIOException e = case fromException e of
 version :: IO ()
 version = putStrLn $ "shorm version " ++ version_name
   where
-    version_name = "1.1.0" -- automatically updated by bump-version.sh
+    version_name = "1.1.1" -- automatically updated by bump-version.sh
 
 
 backupClean :: FilePath -> IO ()
