@@ -36,9 +36,9 @@ linux_x86_64_sha256=$(download_and_hash "shorm-linux-x86_64")
 # Update the Homebrew formula with actual SHA256 hashes and version
 sed -i.bak \
     -e "s/version \".*\"/version \"$VERSION\"/" \
-    -e "/url.*shorm-macos-arm64/{ n; s/sha256 \"[a-f0-9]*\"/sha256 \"$macos_arm64_sha256\"/; }" \
-    -e "/url.*shorm-macos-x86_64/{ n; s/sha256 \"[a-f0-9]*\"/sha256 \"$macos_x86_64_sha256\"/; }" \
-    -e "/url.*shorm-linux-x86_64/{ n; s/sha256 \"[a-f0-9]*\"/sha256 \"$linux_x86_64_sha256\"/; }" \
+    -e "/url.*shorm-macos-arm64/{ n; s/sha256 \"[-_ a-zA-Z0-9]*\"/sha256 \"$macos_arm64_sha256\"/; }" \
+    -e "/url.*shorm-macos-x86_64/{ n; s/sha256 \"[-_ a-zA-Z0-9]*\"/sha256 \"$macos_x86_64_sha256\"/; }" \
+    -e "/url.*shorm-linux-x86_64/{ n; s/sha256 \"[-_ a-zA-Z0-9]*\"/sha256 \"$linux_x86_64_sha256\"/; }" \
     shorm.rb
 
 # Remove the backup file created by sed
