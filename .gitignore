@@ -3,3 +3,5 @@
 *.cabal
 stack.yaml.lock
 *.bak
+shorm
+!shorm/

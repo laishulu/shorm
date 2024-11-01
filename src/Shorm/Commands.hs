@@ -15,7 +15,6 @@ module Shorm.Commands
   )
 where
 
-import qualified Shorm.Config                  as Config
 import           System.Directory               ( listDirectory
                                                 , removeFile
                                                 , copyFile
@@ -40,7 +39,7 @@ import           Control.Exception              ( try
                                                 )
 import           System.Timeout                 ( timeout )
 import           Text.Read                      ( readMaybe )
-import           Data.Maybe                     ( fromMaybe )
+import           Data.Maybe                     ( fromMaybe, isJust )
 import           Data.Time.Clock.POSIX          ( POSIXTime
                                                 , getPOSIXTime
                                                 , posixSecondsToUTCTime
@@ -48,20 +47,30 @@ import           Data.Time.Clock.POSIX          ( POSIXTime
 import           Data.Time.Format               ( formatTime
                                                 , defaultTimeLocale
                                                 )
--- Update this function definition and make it local to the `list` function
+
+-- Use Config.SSHConnection instead of defining a new type
+import qualified Shorm.Config as Config
 
 getSSHConfigPath :: IO FilePath
 getSSHConfigPath = do
   home <- getHomeDirectory
   return $ home </> ".ssh/config"
 
-add :: String -> String -> IO ()
-add name userHostPort = do
+add :: String -> String -> Maybe String -> IO ()
+add connName userHostPort maybeIdFile = do
   configPath <- getSSHConfigPath
-  let (user, host, port) = parseUserHostPort userHostPort
-      newConnection      = Config.normalizeConnection
-        $ Config.SSHConnection name host user (Just $ fromMaybe 22 port)
-  exists <- connectionExists configPath name
+  -- Create a backup before adding a new connection
+  backupCreate configPath
+  let (connUser, connHost, connPort) = parseUserHostPort userHostPort
+      newConnection      = Config.normalizeConnection $ Config.SSHConnection
+        { Config.name            = connName
+        , Config.host            = connHost
+        , Config.user            = connUser
+        , Config.port            = Just $ fromMaybe 22 connPort
+        , Config.idFile          = maybeIdFile
+        , Config.identitiesOnly  = isJust maybeIdFile
+        }
+  exists <- connectionExists configPath connName
   if exists
     then handleAddResult (Just (Right (Left "Connection already exists")))
                          newConnection
@@ -72,9 +81,9 @@ add name userHostPort = do
       handleAddResult result newConnection
 
 connectionExists :: FilePath -> String -> IO Bool
-connectionExists configPath name = do
+connectionExists configPath connName = do
   connections <- Config.readConfig configPath
-  return $ any (\conn -> Config.name conn == name) connections
+  return $ any (\conn -> Config.name conn == connName) connections
 
 handleAddResult
   :: Maybe (Either SomeException (Either String ()))
@@ -147,47 +156,55 @@ printConnection conn =
               (\p -> if p /= 22 then ":" ++ show p else "")
               (Config.port conn)
        )
+    ++ (maybe "" (\connIdFile -> " (ID: " ++ connIdFile ++ (if Config.identitiesOnly conn then ", IdentitiesOnly" else "") ++ ")") (Config.idFile conn))
 
 delete :: String -> IO ()
-delete name = do
+delete connName = do
   configPath <- getSSHConfigPath
-  Config.removeConnection configPath name
-  putStrLn $ "Deleted connection: " ++ name
+  -- Create a backup before deleting a connection
+  backupCreate configPath
+  Config.removeConnection configPath connName
+  putStrLn $ "Deleted connection: " ++ connName
 
-edit :: String -> String -> IO ()
-edit name userHostPort = do
+edit :: String -> String -> Maybe String -> IO ()
+edit connName userHostPort maybeIdFile = do
   configPath  <- getSSHConfigPath
+  -- Create a backup before editing a connection
+  backupCreate configPath
   connections <- Config.readConfig configPath
-  case find (\conn -> Config.name conn == name) connections of
-    Nothing   -> putStrLn $ "Connection not found: " ++ name
+  case find (\conn -> Config.name conn == connName) connections of
+    Nothing   -> putStrLn $ "Connection not found: " ++ connName
     Just conn -> do
-      let (newUser, newHost, newPort) = parseUserHostPort userHostPort
-      let newConn = conn { Config.host = newHost
-                         , Config.user = newUser
-                         , Config.port = newPort
-                         }
-      Config.updateConnection configPath newConn
-      printConnection newConn
+      let (editUser, editHost, editPort) = parseUserHostPort userHostPort
+      let editIdFile = if isJust maybeIdFile then maybeIdFile else Config.idFile conn
+      let editedConn = conn { Config.host   = editHost
+                            , Config.user   = editUser
+                            , Config.port   = editPort
+                            , Config.idFile = editIdFile
+                            , Config.identitiesOnly = isJust editIdFile
+                            }
+      Config.updateConnection configPath editedConn
+      printConnection editedConn
 
 parseUserHostPort :: String -> (Maybe String, String, Maybe Int)
 parseUserHostPort input = case break (== '@') input of
-  (user, '@' : hostPort) ->
-    let (host, port) = parseHostPort hostPort in (Just user, host, port)
-  (hostPort, "") ->
-    let (host, port) = parseHostPort hostPort in (Nothing, host, port)
-  (user, _) ->
+  (userPart, '@' : hostPortPart) ->
+    let (hostPart, portPart) = parseHostPort hostPortPart in (Just userPart, hostPart, portPart)
+  (hostPortPart, "") ->
+    let (hostPart, portPart) = parseHostPort hostPortPart in (Nothing, hostPart, portPart)
+  (userPart, _) ->
     -- This case handles any unexpected input
-    (Just user, "", Nothing)
+    (Just userPart, "", Nothing)
 
 parseHostPort :: String -> (String, Maybe Int)
-parseHostPort hostPort = case break (== ':') hostPort of
-  (host, ':' : portStr) -> case readMaybe portStr of
-    Just port -> (host, Just port)
-    Nothing   -> (host, Nothing)
-  (host, "") -> (host, Nothing)
-  (host, _) ->
+parseHostPort hostPortPart = case break (== ':') hostPortPart of
+  (hostPart, ':' : portStr) -> case readMaybe portStr of
+    Just portNum -> (hostPart, Just portNum)
+    Nothing   -> (hostPart, Nothing)
+  (hostPart, "") -> (hostPart, Nothing)
+  (hostPart, _) ->
     -- This case handles any unexpected input
-    (host, Nothing)
+    (hostPart, Nothing)
 
 search :: String -> IO ()
 search query = do
@@ -289,7 +306,7 @@ backupCreate configPath = do
       backupName = "config-" ++ timestamp
       backupPath = takeDirectory configPath </> backupName
   copyFile configPath backupPath
-  putStrLn $ "Created backup: " ++ backupName
+  putStrLn $ "Created backup: " ++ backupPath
 
 formatTimestamp :: POSIXTime -> String
 formatTimestamp =

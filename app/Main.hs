@@ -7,10 +7,10 @@ import qualified Shorm.Commands                as Commands
 import           Options.Applicative
 
 data Command
-  = Add String String  -- name user@host[:port]
+  = Add String String (Maybe String)  -- name user@host[:port] id_file
   | List
   | Delete String
-  | Edit String String  -- name userHost
+  | Edit String String (Maybe String)  -- name userHost id_file
   | Search String
   | Version
   | BackupClean
@@ -45,9 +45,13 @@ backupOptions = subparser
 
 addOptions :: Parser Command
 addOptions =
-  Add <$> argument str (metavar "NAME" <> help "Connection name") <*> argument
-    str
-    (metavar "USER@HOST[:PORT]" <> help "User, host, and optional port")
+  Add <$> argument str (metavar "NAME" <> help "Connection name")
+      <*> argument str (metavar "USER@HOST[:PORT]" <> help "User, host, and optional port")
+      <*> optional (strOption
+          ( long "id-file"
+         <> metavar "PATH"
+         <> help "Path to the identity file"
+          ))
 
 deleteOptions :: Parser Command
 deleteOptions =
@@ -57,9 +61,12 @@ editOptions :: Parser Command
 editOptions =
   Edit
     <$> argument str (metavar "NAME" <> help "Connection name to edit")
-    <*> argument
-          str
-          (metavar "USER@HOST" <> help "New user@host for the connection")
+    <*> argument str (metavar "USER@HOST" <> help "New user@host for the connection")
+    <*> optional (strOption
+          ( long "id-file"
+         <> metavar "PATH"
+         <> help "Path to the identity file"
+          ))
 
 searchOptions :: Parser Command
 searchOptions = Search <$> argument str (metavar "QUERY" <> help "Search term")
@@ -75,10 +82,10 @@ main = execParser opts >>= runCommand
 
 runCommand :: Command -> IO ()
 runCommand cmd = case cmd of
-    Add name userHostPort -> Commands.add name userHostPort
-    List                  -> Commands.list
-    Delete name           -> Commands.delete name
-    Edit name userHost    -> Commands.edit name userHost
+    Add name userHostPort idFile -> Commands.add name userHostPort idFile
+    List                         -> Commands.list
+    Delete name                  -> Commands.delete name
+    Edit name userHost idFile    -> Commands.edit name userHost idFile
     Search query          -> Commands.search query
     Version               -> Commands.version
     BackupClean           -> Commands.getSSHConfigPath >>= Commands.backupClean

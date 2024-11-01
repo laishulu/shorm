@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, FlexibleContexts #-}
 
 module Shorm.Config
   ( SSHConnection(..)
@@ -38,6 +38,7 @@ import           Data.Char                      ( toLower
 import           Data.Maybe                     ( mapMaybe
                                                 , listToMaybe
                                                 , fromMaybe
+                                                , isJust
                                                 )
 import           Text.Read                      ( readMaybe )
 import           Data.List                      ( nubBy
@@ -51,6 +52,8 @@ data SSHConnection = SSHConnection
   , host :: String
   , user :: Maybe String
   , port :: Maybe Int
+  , idFile :: Maybe String
+  , identitiesOnly :: Bool
   } deriving (Show, Eq)
 
 formatConnection :: SSHConnection -> String
@@ -62,6 +65,7 @@ formatConnection conn =
          Just p | p /= 22 -> ["    Port " ++ show p]
          _                -> []
        )
+    ++ (maybe [] (\idPath -> ["    IdentityFile " ++ idPath, "    IdentitiesOnly yes"]) (idFile conn))
     ++ [""]  -- Empty line between entries
 
 
@@ -114,6 +118,9 @@ parseConnection configLines = do
         , (_ : match : _) <- matches
         ]
 
+      idFilePath = getField "^[[:space:]]*[Ii]dentity[Ff]ile[[:space:]]+(.+)"
+      identitiesOnlyFlag = any (\line -> (line :: String) =~ ("^[[:space:]]*[Ii]dentities[Oo]nly[[:space:]]+[Yy]es" :: String) :: Bool) configLines
+
   if null name''
     then Nothing
     else Just $ normalizeConnection $ SSHConnection
@@ -123,6 +130,8 @@ parseConnection configLines = do
       )
       (getField "^[[:space:]]*[Uu]ser[[:space:]]+([^[:space:]]+)")
       (getField "^[[:space:]]*[Pp]ort[[:space:]]+([0-9]+)" >>= readMaybe)
+      idFilePath
+      (isJust idFilePath && identitiesOnlyFlag)
 
 isHostLine :: String -> Bool
 isHostLine line =
@@ -157,27 +166,38 @@ appendConnection path conn = do
   createDirectoryIfMissing True (takeDirectory path)
 
   result <- try $ do
-    existing <- readConfig path
-    let updatedConnections = existing ++ [conn]
-    writeConfig path updatedConnections
+    appendFile path (formatConnection conn)
 
   case result of
     Left (e :: IOException) ->
-      return $ Left $ "Failed to update config: " ++ show e
+      return $ Left $ "Failed to append connection: " ++ show e
     Right _ -> return $ Right ()
 
 removeConnection :: FilePath -> String -> IO ()
 removeConnection path name' = do
-  existing <- readConfig path
-  writeConfig path (filter (\conn -> name conn /= name') existing)
+  content <- readFile path
+  let lines' = lines content
+      (before, after) = break (isHostLineForName . strip) lines'
+      remaining = dropWhile (not . isHostLineForName . strip) after
+      newContent = unlines $ before ++ remaining
+
+  writeFile path newContent
+  where
+    isHostLineForName :: String -> Bool
+    isHostLineForName line = (line =~ ("^[Hh]ost[[:space:]]+" ++ name' ++ "$" :: String) :: Bool)
 
 updateConnection :: FilePath -> SSHConnection -> IO ()
 updateConnection path newConn = do
-  existing <- readConfig path
-  let updated = map
-        (\conn -> if name conn == name newConn then newConn else conn)
-        existing
-  writeConfig path updated
+  content <- readFile path
+  let lines' = lines content
+      (before, connectionBlock) = break (isHostLineForConn . strip) lines'
+      after = dropWhile (not . isHostLineForConn . strip) $ dropWhile (isHostLineForConn . strip) connectionBlock
+      newContent = unlines $ before ++ lines (formatConnection newConn) ++ after
+
+  writeFile path newContent
+  where
+    isHostLineForConn :: String -> Bool
+    isHostLineForConn line = (line =~ ("^[Hh]ost[[:space:]]+" ++ name newConn ++ "$" :: String) :: Bool)
 generateBackupFilename :: FilePath -> IO FilePath
 generateBackupFilename path = do
     now <- getCurrentTime
