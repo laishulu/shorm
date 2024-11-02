@@ -11,20 +11,20 @@ download_and_hash() {
     local asset_name=$1
     local url="https://github.com/laishulu/shorm/releases/download/v${VERSION}/${asset_name}"
     local tmp_file="/tmp/${asset_name}"
-    
+
     # Download the asset
     curl -L -o "$tmp_file" "$url"
-    
+
     # Calculate SHA256
     if [[ "$OSTYPE" == "darwin"* ]]; then
         sha256=$(shasum -a 256 "$tmp_file" | awk '{print $1}')
     else
         sha256=$(sha256sum "$tmp_file" | awk '{print $1}')
     fi
-    
+
     # Clean up
     rm "$tmp_file"
-    
+
     echo "$sha256"
 }
 
@@ -39,10 +39,10 @@ sed -i.bak \
     -e "/url.*shorm-macos-arm64/{ n; s/sha256 \"[-_ a-zA-Z0-9]*\"/sha256 \"$macos_arm64_sha256\"/; }" \
     -e "/url.*shorm-macos-x86_64/{ n; s/sha256 \"[-_ a-zA-Z0-9]*\"/sha256 \"$macos_x86_64_sha256\"/; }" \
     -e "/url.*shorm-linux-x86_64/{ n; s/sha256 \"[-_ a-zA-Z0-9]*\"/sha256 \"$linux_x86_64_sha256\"/; }" \
-    shorm.rb
+    homebrew/shorm.rb
 
 # Remove the backup file created by sed
-rm shorm.rb.bak
+rm homebrew/shorm.rb.bak
 
 echo "Updated Homebrew formula with actual SHA256 hashes"
 echo "Please review the changes, commit, and push them to GitHub"
