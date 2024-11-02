@@ -9,7 +9,7 @@ been discontinued.
 To install shorm using Homebrew or Linuxbrew, run the following commands:
 
 ```bash
-brew tap laishulu/shorm https://github.com/laishulu/shorm
+brew tap laishulu/homebrew
 brew install shorm
 ```
 
