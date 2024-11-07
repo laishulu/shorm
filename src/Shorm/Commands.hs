@@ -82,11 +82,6 @@ add connName userHostPort maybeIdFile = do
       result <- withTimeout 30000000 $ try $ Config.appendConnection configPath newConnection
       handleAddResult result newConnection
 
-findExistingConnections :: FilePath -> String -> IO [Config.SSHConnection]
-findExistingConnections configPath connName = do
-  connections <- Config.readConfig configPath
-  return $ filter (\conn -> Config.name conn == connName) connections
-
 handleAddResult
   :: Maybe (Either SomeException (Either String ()))
   -> Config.SSHConnection

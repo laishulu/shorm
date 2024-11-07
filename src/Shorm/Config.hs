@@ -34,8 +34,6 @@ import           System.IO                      ( hPutStr
                                                 , hClose
                                                 , openTempFile
                                                 , Handle
-                                                , withFile
-                                                , IOMode(WriteMode)
                                                 )
 import           Data.Char                      ( toLower
                                                 , isSpace
@@ -100,9 +98,7 @@ readConfig path = do
     else return []
  where
   isSameConnection conn1 conn2 =
-    map toLower (host conn1) == map toLower (host conn2)
-      && (fmap (map toLower) (user conn1) == fmap (map toLower) (user conn2))
-      && map toLower (name conn1) == map toLower (name conn2)
+    map toLower (name conn1) == map toLower (name conn2)
 
 parseConnection :: [String] -> Maybe SSHConnection
 parseConnection configLines = do
@@ -192,8 +188,7 @@ appendConnection path conn = do
 removeConnection :: FilePath -> String -> IO (Either String Bool)
 removeConnection path name' = handle (\(e :: IOException) -> return $ Left $ "Error removing connection: " ++ show e) $ do
   content <- TIO.readFile path
-  let lines' = T.lines content
-      blocks = splitOnHost (map T.unpack $ T.lines content)
+  let blocks = splitOnHost (map T.unpack $ T.lines content)
       -- Keep all blocks that don't match the host we're removing
       remainingBlocks = filter (not . isTargetHostBlock) blocks
       newContent = T.unlines $ map T.pack $ concat remainingBlocks
