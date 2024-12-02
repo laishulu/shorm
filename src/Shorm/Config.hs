@@ -27,7 +27,7 @@ import           Control.Exception              ( try
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import           System.IO.Error                ( isDoesNotExistError )
-import           System.FilePath                ( takeDirectory, takeFileName, (</>), takeExtension )
+import           System.FilePath                ( takeDirectory, takeFileName, (</>), takeBaseName )
 import           Data.Time.Clock                ( getCurrentTime )
 import           Data.Time.Format               ( formatTime, defaultTimeLocale )
 import           System.IO                      ( hPutStr
@@ -148,9 +148,9 @@ withTempFile dir template action = bracket
   )
   (\(tempPath, tempHandle) -> action tempPath tempHandle)
 
-writeConfig :: FilePath -> [SSHConnection] -> IO ()
-writeConfig path conns = do
-  backupPath <- generateBackupFilename path
+writeConfig :: FilePath -> [SSHConnection] -> String -> String -> IO ()
+writeConfig path conns action connName = do
+  backupPath <- generateBackupFilename path action connName
   exists <- doesFileExist path
   when exists $ do
     copyFile path backupPath
@@ -177,8 +177,10 @@ appendConnection path conn = do
   -- Ensure parent directory exists
   createDirectoryIfMissing True (takeDirectory path)
 
-  result <- try $ do
-    appendFile path (formatConnection conn)
+  existingConnections <- readConfig path
+  let updatedConnections = existingConnections ++ [conn]
+
+  result <- try $ writeConfig path updatedConnections "add" (name conn)
 
   case result of
     Left (e :: IOException) ->
@@ -234,12 +236,11 @@ updateConnection path newConn = do
       (T.unpack (T.strip (T.pack line)) :: String) =~ 
         (T.unpack $ T.pack $ "^[Hh]ost[[:space:]]+" ++ name newConn ++ "$" :: String)
 
-generateBackupFilename :: FilePath -> IO FilePath
-generateBackupFilename path = do
+generateBackupFilename :: FilePath -> String -> String -> IO FilePath
+generateBackupFilename path action connName = do
     now <- getCurrentTime
     let timestamp = formatTime defaultTimeLocale "%Y%m%d-%H%M%S" now
         (dir, file) = (takeDirectory path, takeFileName path)
-        ext = takeExtension file
-        nameWithoutExt = take (length file - length ext) file
-        backupName = nameWithoutExt ++ "-" ++ timestamp ++ ext
+        nameWithoutExt = takeBaseName file
+        backupName = nameWithoutExt ++ "-" ++ timestamp ++ "-pre-" ++ action ++ "-" ++ connName ++ ".bak"
     return $ dir </> backupName

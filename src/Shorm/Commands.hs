@@ -20,13 +20,15 @@ import           System.Directory               ( listDirectory
                                                 , copyFile
                                                 )
 import           System.FilePath                ( (</>)
-                                                , takeFileName
                                                 , takeDirectory
+                                                , takeFileName
                                                 )
 import           Data.List                      ( sortOn )
 import           Data.Ord                       ( Down(Down) )
 import           Data.List                      ( find
                                                 , isInfixOf
+                                                , isPrefixOf
+                                                , isSuffixOf
                                                 )
 import           System.Directory               ( getHomeDirectory
                                                 , doesFileExist
@@ -61,8 +63,6 @@ getSSHConfigPath = do
 add :: String -> String -> Maybe String -> IO ()
 add connName userHostPort maybeIdFile = do
   configPath <- getSSHConfigPath
-  -- Create a backup before adding a new connection
-  backupCreate configPath
   let (connUser, connHost, connPort) = parseUserHostPort userHostPort
       newConnection      = Config.normalizeConnection $ Config.SSHConnection
         { Config.name            = connName
@@ -165,7 +165,7 @@ delete connName = do
       Nothing -> throwIO $ userError $ "Connection not found: " ++ connName
       Just _ -> do
         let updatedConnections = filter (\conn -> Config.name conn /= connName) connections
-        Config.writeConfig configPath updatedConnections
+        Config.writeConfig configPath updatedConnections "delete" connName
 
   case result of
     Left e -> case fromException e of
@@ -192,7 +192,7 @@ edit connName userHostPort maybeIdFile = do
                                  , Config.identitiesOnly = isJust editIdFile
                                  }
         let updatedConnections = map (\conn -> if Config.name conn == connName then editedConn else conn) connections
-        Config.writeConfig configPath updatedConnections
+        Config.writeConfig configPath updatedConnections "edit" connName
         return editedConn
   case result of
     Left e -> case fromException e of
@@ -271,7 +271,7 @@ backupClean :: FilePath -> IO ()
 backupClean configPath = do
   let configDir = takeDirectory configPath
   files <- listDirectory configDir
-  let backups = filter (isBackupFile $ takeFileName configPath) files
+  let backups = filter isBackupFile files
   mapM_
     (\backup -> do
       removeFile (configDir </> backup)
@@ -284,7 +284,7 @@ backupRestore :: FilePath -> Maybe String -> IO ()
 backupRestore configPath maybeBackupName = do
   let configDir = takeDirectory configPath
   files <- listDirectory configDir
-  let backups = filter (isBackupFile $ takeFileName configPath) files
+  let backups = filter isBackupFile files
   case maybeBackupName of
     Just backupName -> if backupName `elem` backups
       then do
@@ -301,7 +301,7 @@ backupList :: FilePath -> IO ()
 backupList configPath = do
   let configDir = takeDirectory configPath
   files <- listDirectory configDir
-  let backups = filter (isBackupFile $ takeFileName configPath) files
+  let backups = filter isBackupFile files
   if null backups
     then putStrLn "No backups found."
     else do
@@ -309,24 +309,18 @@ backupList configPath = do
       mapM_ (\backup -> putStrLn $ "  " ++ backup)
         $ sortOn (Down . getTimestamp) backups
 
-isBackupFile :: String -> String -> Bool
-isBackupFile configName fileName =
-  take (length configName) fileName
-    == configName
-    && length (drop (length configName) fileName)
-    == 16
-    &&  -- "-YYYYMMDD-HHMMSS"
-       all (\c -> c == '-' || c `elem` ['0' .. '9'])
-           (drop (length configName) fileName)
+isBackupFile :: String -> Bool
+isBackupFile fileName = "config-" `isPrefixOf` fileName && ".bak" `isSuffixOf` fileName
 
 getTimestamp :: String -> String
-getTimestamp = takeWhile (/= '.') . drop 1 . dropWhile (/= '.')
+getTimestamp = takeWhile (/= '.') . drop 7  -- Skip "config-" prefix
 
 backupCreate :: FilePath -> IO ()
 backupCreate configPath = do
   currentTime <- getPOSIXTime
   let timestamp  = formatTimestamp currentTime
-      backupName = "config-" ++ timestamp
+      originalFileName = takeFileName configPath
+      backupName = originalFileName ++ "-" ++ timestamp ++ ".bak"
       backupPath = takeDirectory configPath </> backupName
   copyFile configPath backupPath
   putStrLn $ "Created backup: " ++ backupPath
