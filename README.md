@@ -97,7 +97,7 @@ shorm backup list
 shorm backup restore
 
 # Restore a specific backup
-shorm backup restore config-20231029-123456
+shorm backup restore shorm-20231029-123456-pre-action-connname.bak
 
 # Remove all backup files
 shorm backup clean
